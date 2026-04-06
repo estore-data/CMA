@@ -274,6 +274,9 @@ export default function CMAApp() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loadingMsg, setLoadingMsg] = useState("");
+  const [step, setStep] = useState("search"); // "search" | "review" | "results"
+  const [editComps, setEditComps] = useState([]);
+  const [editProperty, setEditProperty] = useState(null);
   const intervalRef = useRef(null);
 
   const msgs = [
@@ -371,10 +374,160 @@ export default function CMAApp() {
         throw new Error("Could not parse response");
       }
       parsed._sources = sources;
+      // Go to review step with editable comps
+      setEditProperty(parsed.property || {});
+      setEditComps(
+        (parsed.comparables || []).map((c, i) => ({
+          id: i,
+          address: c.address || "",
+          soldPrice: c.soldPrice || "",
+          soldDate: c.soldDate || "",
+          sqft: c.sqft || "",
+          bedBath: c.bedBath || "",
+          floor: c.floor || "",
+          parking: c.parking || "",
+          locker: c.locker || "",
+          type: c.type || "",
+          sameBuilding: c.sameBuilding || false,
+          buildingName: c.buildingName || "",
+          notes: c.notes || "",
+          verified: c.verified ?? false,
+          sourceUrl: c.sourceUrl || "",
+        }))
+      );
       setData(parsed);
+      setStep("review");
     } catch (e) {
       clearInterval(intervalRef.current);
       setError(e.message || "Something went wrong");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function updateComp(id, field, value) {
+    setEditComps((prev) => prev.map((c) => (c.id === id ? { ...c, [field]: value } : c)));
+  }
+
+  function deleteComp(id) {
+    setEditComps((prev) => prev.filter((c) => c.id !== id));
+  }
+
+  function addEmptyComp() {
+    setEditComps((prev) => [
+      ...prev,
+      {
+        id: Date.now(),
+        address: "",
+        soldPrice: "",
+        soldDate: "",
+        sqft: "",
+        bedBath: "",
+        floor: "",
+        parking: "",
+        locker: "",
+        type: "",
+        sameBuilding: false,
+        buildingName: "",
+        notes: "",
+        verified: true,
+        sourceUrl: "",
+      },
+    ]);
+  }
+
+  async function calculateCMA() {
+    if (editComps.length === 0) return;
+    setLoading(true);
+    setError(null);
+    setLoadingMsg("Calculating adjustments...");
+
+    try {
+      const isCondo = propertyType === "condo";
+      const subjectDesc = isCondo
+        ? `Subject: ${data.address}, ${editProperty.sqft || sqft} sqft, ${editProperty.bedrooms} bed, ${editProperty.bathrooms} bath, floor ${editProperty.floor}, parking: ${editProperty.parking}, locker: ${editProperty.locker}, ceiling height: ${editProperty.ceilingHeight || "standard"}, style: ${editProperty.style}`
+        : `Subject: ${data.address}, ${editProperty.bedrooms} bed, ${editProperty.bathrooms} bath, lot: ${editProperty.lotSize}, parking: ${editProperty.parking}, style: ${editProperty.style}`;
+
+      const compsDesc = editComps
+        .map(
+          (c, i) =>
+            `Comp ${i + 1}: ${c.address}, sold ${formatPrice(Number(c.soldPrice) || 0)} on ${c.soldDate}, ${c.sqft} sqft, ${c.bedBath} bed/bath, floor ${c.floor}, parking: ${c.parking}, locker: ${c.locker}${c.sameBuilding ? " (same building)" : c.buildingName ? ` (${c.buildingName})` : ""}${c.notes ? `, notes: ${c.notes}` : ""}`
+        )
+        .join("\n");
+
+      const calcPrompt = `You are a CMA adjustment calculator. You are given a subject property and verified comparable sales. Your ONLY job is to calculate adjustments and a weighted average. Do NOT search the web. Use ONLY the data provided.
+
+${subjectDesc}
+
+${compsDesc}
+
+For EACH comp, calculate dollar adjustments comparing it to the subject:
+${isCondo ? "- Sqft difference (use area avg $/sqft)\n- Floor level difference\n- Ceiling height\n- Parking (spots difference)\n- Locker\n- Building premium (if different building)\n- Penthouse premium (if applicable)\n- Finishes/condition" : "- Bedrooms difference\n- Bathrooms difference\n- Lot size difference\n- Parking\n- Condition/renovation\n- Basement\n- Age"}
+
+Then compute adjustedPrice = soldPrice + totalAdjustment for each.
+Assign weights (must sum to 1.0). Compute weightedAverage = sum(adjustedPrice × weight).
+conservative = weightedAverage × 0.97, aggressive = weightedAverage × 1.03.
+
+Respond ONLY in this JSON format, no markdown:
+{
+  "comparables": [
+    {
+      "address": "...",
+      "soldPrice": 0,
+      "soldDate": "...",
+      "bedBath": "...",
+      "sqft": 0,
+      "floor": "...",
+      "parking": "...",
+      "type": "...",
+      "sameBuilding": false,
+      "buildingName": "...",
+      "quality": "Strong|Good|Fair|Baseline",
+      "weight": 0.20,
+      "verified": true,
+      "adjustments": [{"factor": "description", "amount": 0}],
+      "totalAdjustment": 0,
+      "adjustedPrice": 0
+    }
+  ],
+  "reconciliation": {
+    "weightedAverage": 0,
+    "conservative": 0,
+    "aggressive": 0,
+    "listingStrategy": "...",
+    "reasoning": "..."
+  }
+}`;
+
+      const res = await fetch("/api/cma", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 4000,
+          system: calcPrompt,
+          messages: [
+            { role: "user", content: "Calculate the adjustments and weighted average for the comparables provided. Return ONLY the JSON." },
+          ],
+        }),
+      });
+      const json = await res.json();
+
+      const textBlocks = (json.content || []).filter((b) => b.type === "text").map((b) => b.text);
+      const raw = textBlocks.join("\n").replace(/```json|```/g, "").trim();
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error("Could not parse calculation response");
+
+      const calcResult = JSON.parse(jsonMatch[0]);
+      // Merge calc results back into data
+      setData((prev) => ({
+        ...prev,
+        comparables: calcResult.comparables || prev.comparables,
+        reconciliation: calcResult.reconciliation,
+      }));
+      setStep("results");
+    } catch (e) {
+      setError(e.message || "Calculation failed");
     } finally {
       setLoading(false);
     }
@@ -937,8 +1090,169 @@ export default function CMAApp() {
           </div>
         )}
 
+        {/* Review step — editable comps */}
+        {step === "review" && data && !loading && (
+          <div>
+            {/* Property header (read-only summary) */}
+            <div style={{ marginBottom: 20, borderBottom: "1.5px solid #d4d0c8", paddingBottom: 16 }}>
+              <div style={{ fontSize: 11, fontFamily: "'DM Mono', monospace", textTransform: "uppercase", letterSpacing: "0.1em", color: "#999", marginBottom: 4 }}>
+                Review &amp; edit comparables
+              </div>
+              <h2 style={{ fontSize: 24, fontWeight: 400, fontFamily: "'Instrument Serif', Georgia, serif", margin: "0 0 6px" }}>
+                {data.address}
+              </h2>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, fontSize: 12, color: "#666" }}>
+                {editProperty?.bedrooms && <span>{editProperty.bedrooms} bed</span>}
+                {editProperty?.bathrooms && <span>{editProperty.bathrooms} bath</span>}
+                {(editProperty?.sqft || sqft) && <span>{editProperty?.sqft || sqft} sqft</span>}
+                {editProperty?.lotSize && <span>{editProperty.lotSize} lot</span>}
+                {editProperty?.parking && <span>{editProperty.parking} parking</span>}
+                {editProperty?.floor && <span>{editProperty.floor} floor</span>}
+                {editProperty?.style && <span>{editProperty.style}</span>}
+              </div>
+            </div>
+
+            <div style={{ fontSize: 13, color: "#666", marginBottom: 16, lineHeight: 1.5 }}>
+              Review the comparables below. Edit any incorrect data, delete bad comps, or add your own from MLS. When ready, hit <strong>Calculate Valuation</strong>.
+            </div>
+
+            {/* Editable comp cards */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 20 }}>
+              {editComps.map((c) => (
+                <div key={c.id} style={{ background: "#fff", border: "1.5px solid #d4d0c8", borderRadius: 10, padding: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                    <div style={{ flex: 1, marginRight: 12 }}>
+                      <input
+                        value={c.address}
+                        onChange={(e) => updateComp(c.id, "address", e.target.value)}
+                        placeholder="Address"
+                        style={{ width: "100%", padding: "6px 10px", fontSize: 14, fontWeight: 600, border: "1px solid #e0ddd6", borderRadius: 6, fontFamily: "'DM Sans', sans-serif" }}
+                      />
+                    </div>
+                    <button
+                      onClick={() => deleteComp(c.id)}
+                      style={{ padding: "4px 12px", fontSize: 12, fontWeight: 600, border: "1px solid #fecaca", borderRadius: 6, background: "#fef2f2", color: "#A32D2D", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", whiteSpace: "nowrap" }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 10, color: "#999", marginBottom: 2, textTransform: "uppercase" }}>Sold price</div>
+                      <input
+                        value={c.soldPrice}
+                        onChange={(e) => updateComp(c.id, "soldPrice", e.target.value.replace(/[^0-9]/g, ""))}
+                        placeholder="e.g. 1200000"
+                        style={{ width: "100%", padding: "6px 8px", fontSize: 13, border: "1px solid #e0ddd6", borderRadius: 6, fontFamily: "'DM Mono', monospace" }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: "#999", marginBottom: 2, textTransform: "uppercase" }}>Sold date</div>
+                      <input
+                        value={c.soldDate}
+                        onChange={(e) => updateComp(c.id, "soldDate", e.target.value)}
+                        placeholder="e.g. Mar 2026"
+                        style={{ width: "100%", padding: "6px 8px", fontSize: 13, border: "1px solid #e0ddd6", borderRadius: 6 }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: "#999", marginBottom: 2, textTransform: "uppercase" }}>Sqft</div>
+                      <input
+                        value={c.sqft}
+                        onChange={(e) => updateComp(c.id, "sqft", e.target.value.replace(/[^0-9]/g, ""))}
+                        placeholder="e.g. 1400"
+                        style={{ width: "100%", padding: "6px 8px", fontSize: 13, border: "1px solid #e0ddd6", borderRadius: 6 }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: "#999", marginBottom: 2, textTransform: "uppercase" }}>Bed/Bath</div>
+                      <input
+                        value={c.bedBath}
+                        onChange={(e) => updateComp(c.id, "bedBath", e.target.value)}
+                        placeholder="e.g. 2+1/2"
+                        style={{ width: "100%", padding: "6px 8px", fontSize: 13, border: "1px solid #e0ddd6", borderRadius: 6 }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: "#999", marginBottom: 2, textTransform: "uppercase" }}>Floor</div>
+                      <input
+                        value={c.floor}
+                        onChange={(e) => updateComp(c.id, "floor", e.target.value)}
+                        placeholder="e.g. 28th"
+                        style={{ width: "100%", padding: "6px 8px", fontSize: 13, border: "1px solid #e0ddd6", borderRadius: 6 }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: "#999", marginBottom: 2, textTransform: "uppercase" }}>Parking</div>
+                      <input
+                        value={c.parking}
+                        onChange={(e) => updateComp(c.id, "parking", e.target.value)}
+                        placeholder="e.g. 1 owned"
+                        style={{ width: "100%", padding: "6px 8px", fontSize: 13, border: "1px solid #e0ddd6", borderRadius: 6 }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: "#999", marginBottom: 2, textTransform: "uppercase" }}>Locker</div>
+                      <input
+                        value={c.locker}
+                        onChange={(e) => updateComp(c.id, "locker", e.target.value)}
+                        placeholder="e.g. Yes"
+                        style={{ width: "100%", padding: "6px 8px", fontSize: 13, border: "1px solid #e0ddd6", borderRadius: 6 }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: "#999", marginBottom: 2, textTransform: "uppercase" }}>Type</div>
+                      <input
+                        value={c.type}
+                        onChange={(e) => updateComp(c.id, "type", e.target.value)}
+                        placeholder="e.g. Condo"
+                        style={{ width: "100%", padding: "6px 8px", fontSize: 13, border: "1px solid #e0ddd6", borderRadius: 6 }}
+                      />
+                    </div>
+                  </div>
+                  {c.verified === false && (
+                    <div style={{ marginTop: 8, fontSize: 11, color: "#A32D2D", display: "flex", alignItems: "center", gap: 4 }}>
+                      <span style={{ background: "#FCEBEB", padding: "1px 6px", borderRadius: 3, fontWeight: 600, fontSize: 9 }}>UNVERIFIED</span>
+                      Verify this data against MLS before calculating
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Add comp / Find more / Calculate buttons */}
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 40 }}>
+              <button
+                onClick={addEmptyComp}
+                style={{ padding: "10px 20px", fontSize: 13, fontWeight: 600, border: "1.5px solid #d4d0c8", borderRadius: 8, background: "transparent", color: "#666", cursor: "pointer", fontFamily: "'DM Sans', sans-serif" }}
+              >
+                + Add comp from MLS
+              </button>
+              <button
+                onClick={runCMA}
+                disabled={loading}
+                style={{ padding: "10px 20px", fontSize: 13, fontWeight: 600, border: "1.5px solid #d4d0c8", borderRadius: 8, background: "transparent", color: "#666", cursor: "pointer", fontFamily: "'DM Sans', sans-serif" }}
+              >
+                Find more comps
+              </button>
+              <div style={{ flex: 1 }} />
+              <button
+                onClick={calculateCMA}
+                disabled={loading || editComps.length === 0}
+                style={{
+                  padding: "10px 28px", fontSize: 14, fontWeight: 600, border: "none", borderRadius: 8,
+                  background: editComps.length === 0 ? "#ccc" : "#1a1a1a", color: "#fff", cursor: editComps.length === 0 ? "not-allowed" : "pointer",
+                  fontFamily: "'DM Sans', sans-serif", transition: "all 0.2s",
+                }}
+              >
+                Calculate valuation ({editComps.length} comp{editComps.length !== 1 ? "s" : ""})
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Results */}
-        {data && (
+        {step === "results" && data && (
           <div>
             {/* Property header */}
             <div style={{ marginBottom: 28, borderBottom: "1.5px solid #d4d0c8", paddingBottom: 20 }}>
@@ -1201,7 +1515,17 @@ export default function CMAApp() {
                 Export PDF
               </button>
               <button
-                onClick={() => { setData(null); setAddress(""); setUnitNumber(""); setSqft(""); }}
+                onClick={() => setStep("review")}
+                style={{
+                  padding: "10px 24px", fontSize: 13, fontWeight: 600, border: "1.5px solid #d4d0c8",
+                  borderRadius: 8, background: "transparent", color: "#666", cursor: "pointer",
+                  fontFamily: "'DM Sans', sans-serif",
+                }}
+              >
+                Edit comps
+              </button>
+              <button
+                onClick={() => { setData(null); setAddress(""); setUnitNumber(""); setSqft(""); setStep("search"); setEditComps([]); setEditProperty(null); }}
                 style={{
                   padding: "10px 24px", fontSize: 13, fontWeight: 600, border: "1.5px solid #d4d0c8",
                   borderRadius: 8, background: "transparent", color: "#666", cursor: "pointer",
@@ -1215,7 +1539,7 @@ export default function CMAApp() {
         )}
 
         {/* Empty state */}
-        {!loading && !data && !error && (
+        {!loading && !data && !error && step === "search" && (
           <div style={{ textAlign: "center", padding: "40px 0", color: "#bbb" }}>
             <div style={{ fontSize: 48, marginBottom: 12 }}>&#8962;</div>
             <div style={{ fontSize: 14 }}>Enter a Toronto-area address above to generate a valuation</div>
