@@ -89,28 +89,42 @@ Always use real data from web search. If you cannot find exact sold prices, esti
 
 const CONDO_PROMPT = `You are a Toronto real estate comparative market analysis expert specializing in CONDOMINIUMS. When given a condo unit address, you must:
 
-1. Search for the SPECIFIC UNIT details — unit number, floor, suite size (sqft), bedrooms, bathrooms, locker, parking, maintenance fees, building name
-2. Search for 5 recent comparable SOLD CONDO UNITS (2025-2026 only) in the SAME BUILDING or very similar nearby buildings
-3. Search for current condo market conditions in the area
+1. Search for the SPECIFIC UNIT's last sold price and details
+2. Search for the unit details — floor, suite size (sqft), bedrooms, bathrooms, locker, parking, maintenance fees, building name, ceiling height
+3. Search for 5 recent comparable SOLD CONDO UNITS (2025-2026 only) that are SIMILAR IN SIZE to the subject unit
+4. Search for current condo market conditions in the area
 
 IMPORTANT SEARCH STRATEGY FOR CONDOS:
 - The user may provide abbreviated addresses like "3508-375 King St W". This means Unit 3508 at 375 King Street West.
+- Penthouse units are often listed on MLS with "PH" prefix. For unit 3508, ALSO search for "PH3508", "PH2-3508", "PH-3508". Try multiple variations.
 - Search for the building by its FULL street address first (e.g., "375 King Street West Toronto condo").
-- Then search for the specific unit (e.g., "Unit 3508 375 King Street West" or "3508-375 King St W Toronto sold").
+- Then search for the specific unit using MULTIPLE formats: "Unit 3508 375 King", "3508-375 King", "PH3508 375 King", "PH2-3508 375 King St W sold price".
 - Also search for the building name (e.g., "Theatre Park condo Toronto") if you identify it.
-- Search for recent sales IN THE SAME BUILDING first. If fewer than 3, expand to similar buildings nearby.
-- CRITICAL: Match unit TYPE correctly. A penthouse/large unit must be compared against other penthouses/large units, NOT against small 1-bedroom units. Match by sqft range (+/- 20%), bedroom count, and floor level.
+- You MUST find and report the subject unit's last sold price. This is critical context for the valuation.
 
-CONDO-SPECIFIC ADJUSTMENT FACTORS (use these instead of lot size/basement):
-- Unit size (sqft difference)
+COMPARABLE SELECTION — THIS IS CRITICAL:
+- Comparables MUST be similar in SIZE to the subject unit. Match by sqft range (+/- 20%).
+- Do NOT compare a 1,500+ sqft penthouse against 600-800 sqft 1-bedroom units. That is invalid.
+- For large/penthouse units: search ACROSS NEARBY BUILDINGS in the area for similarly-sized units (1,200-1,800 sqft range for a 1,500 sqft unit).
+- Same-building comps are great BUT ONLY IF they are a similar size. A 700 sqft unit in the same building is NOT a valid comp for a 1,500 sqft penthouse.
+- Prefer comps in this priority order:
+  1. Same building, similar size (+/- 20% sqft) — best comp
+  2. Nearby building (same neighbourhood), similar size — very good comp
+  3. Same building, different size — use only if nothing else, apply large sqft adjustment
+- If the subject is a penthouse with premium features (high ceilings, terrace, etc.), search for other penthouses in the area.
+
+CONDO-SPECIFIC ADJUSTMENT FACTORS:
+- Unit size (sqft difference — use area $/sqft to price the difference)
 - Floor level (higher floors command premium, ~$5K-15K per 5 floors)
+- Ceiling height (standard 9ft vs 10ft+ or 12ft — premium of $30K-80K for high ceilings)
 - Exposure/view (south/west premium, unobstructed views)
 - Parking spots (0 vs 1 vs 2)
 - Locker (with vs without)
 - Maintenance fees (per sqft comparison)
-- Balcony/terrace size
+- Balcony/terrace size (large private terraces are significant premium)
 - Renovation/finishes quality
-- Building amenities differential (if comparing across buildings)
+- Building premium (newer/more prestigious building vs older — applies when comparing across buildings)
+- Penthouse premium (if subject is PH and comp is not)
 
 VALUATION METHODOLOGY — YOU MUST FOLLOW THIS EXACTLY:
 
@@ -120,7 +134,7 @@ Step 1: For EACH comparable, calculate individual dollar adjustments relative to
 
 Step 2: For each comp, compute: adjustedPrice = soldPrice + sum(all adjustments for that comp)
 
-Step 3: Assign a weight (0.05 to 0.30) to each comp based on similarity/recency/reliability. Weights MUST sum to 1.0. Same-building comps should get higher weight.
+Step 3: Assign a weight (0.05 to 0.30) to each comp based on similarity/recency/reliability. Weights MUST sum to 1.0. Same-size comps get highest weight regardless of building.
 
 Step 4: Compute weightedAverage = sum(adjustedPrice × weight) across all comps. This IS the midpoint.
 
@@ -141,6 +155,7 @@ CRITICAL: Respond ONLY in this exact JSON format, no markdown, no backticks, no 
     "bedrooms": "e.g. 2+1",
     "bathrooms": "e.g. 2",
     "sqft": 1250,
+    "ceilingHeight": "12 ft",
     "parking": "1 owned",
     "locker": "Yes/No",
     "maintenanceFee": "$850/mo",
@@ -154,10 +169,11 @@ CRITICAL: Respond ONLY in this exact JSON format, no markdown, no backticks, no 
       "address": "unit and building address",
       "bedBath": "2+1/2",
       "type": "Condo",
-      "sqft": 1100,
+      "sqft": 1400,
       "floor": "28th",
-      "sameBuilding": true,
-      "soldPrice": 850000,
+      "sameBuilding": false,
+      "buildingName": "building name if different",
+      "soldPrice": 1050000,
       "soldDate": "Mon YYYY",
       "quality": "Strong|Good|Fair|Baseline",
       "weight": 0.25,
@@ -165,11 +181,12 @@ CRITICAL: Respond ONLY in this exact JSON format, no markdown, no backticks, no 
       "adjustments": [
         {"factor": "Unit size (150 sqft smaller)", "amount": 60000},
         {"factor": "Floor level (7 floors lower)", "amount": 15000},
-        {"factor": "No locker", "amount": 8000},
+        {"factor": "Standard 9ft ceilings (vs 12ft)", "amount": 50000},
+        {"factor": "Building premium (less prestigious)", "amount": 25000},
         {"factor": "Better finishes (superior)", "amount": -25000}
       ],
-      "totalAdjustment": 58000,
-      "adjustedPrice": 908000
+      "totalAdjustment": 125000,
+      "adjustedPrice": 1175000
     }
   ],
   "marketContext": {
@@ -185,9 +202,9 @@ CRITICAL: Respond ONLY in this exact JSON format, no markdown, no backticks, no 
     "avgPricePerSqft": "$950"
   },
   "reconciliation": {
-    "weightedAverage": 900000,
-    "conservative": 873000,
-    "aggressive": 927000,
+    "weightedAverage": 1150000,
+    "conservative": 1115500,
+    "aggressive": 1184500,
     "listingStrategy": "Brief listing price recommendation",
     "reasoning": "2-3 sentence explanation referencing the math above"
   },
@@ -277,9 +294,13 @@ export default function CMAApp() {
         const fullAddr = unit
           ? `Unit ${unit}, ${queryAddress}, Toronto`
           : queryAddress;
-        userContent = `Perform a full comparative market analysis for this CONDO unit: ${fullAddr}. ` +
-          (unit ? `The unit number is ${unit}. ` : "") +
-          `Search for the specific unit details in the building, find 5 recent 2025-2026 sold comparable condo units (prioritize same-building sales), get current condo market stats, and provide a valuation range. Match comparables by similar size, bedroom count, and floor level — do NOT compare a penthouse against small 1-bedrooms. Return ONLY the JSON object specified in the system prompt.`;
+        const phVariants = unit
+          ? ` The unit may be listed on MLS as "PH${unit}", "PH-${unit}", "PH2-${unit}", or "Unit ${unit}". Try multiple search variations to find the last sold price.`
+          : "";
+        userContent = `Perform a full comparative market analysis for this CONDO unit: ${fullAddr}.` +
+          (unit ? ` The unit number is ${unit}.` : "") +
+          phVariants +
+          ` IMPORTANT: First find the subject unit's last sold price — search multiple name variations. Then find 5 recent 2025-2026 sold comparable condo units that are SIMILAR IN SIZE (within +/-20% sqft). Search across nearby buildings in the area, not just the same building. Do NOT use small 1-bed units as comps for a large/penthouse unit. Return ONLY the JSON object specified in the system prompt.`;
       } else {
         userContent = `Perform a full comparative market analysis for this property: ${queryAddress}. Search for the property details, find 5 recent 2025-2026 sold comparables in the same neighbourhood, get current market stats, and provide a valuation range. Return ONLY the JSON object specified in the system prompt.`;
       }
@@ -878,6 +899,7 @@ export default function CMAApp() {
                 {data.property?.lotSize && <span>{data.property.lotSize} lot</span>}
                 {data.property?.parking && <span>{data.property.parking} parking</span>}
                 {data.property?.locker && <span>Locker: {data.property.locker}</span>}
+                {data.property?.ceilingHeight && <span>{data.property.ceilingHeight} ceilings</span>}
                 {data.property?.maintenanceFee && <span>Maint: {data.property.maintenanceFee}</span>}
                 {data.property?.style && <span>{data.property.style}</span>}
               </div>
@@ -931,6 +953,7 @@ export default function CMAApp() {
                           <div style={{ fontWeight: 600, fontSize: 14 }}>
                             {c.address}
                             {c.sameBuilding && <span style={{ marginLeft: 6, fontSize: 10, color: "#0F6E56", fontWeight: 500 }}>SAME BLDG</span>}
+                            {!c.sameBuilding && c.buildingName && <span style={{ marginLeft: 6, fontSize: 10, color: "#185FA5", fontWeight: 500 }}>{c.buildingName}</span>}
                           </div>
                           <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>
                             {c.bedBath} &middot; {c.type}
