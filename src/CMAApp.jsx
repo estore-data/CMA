@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from "react";
+import jsPDF from "jspdf";
+import "jspdf-autotable";
 
 const SYSTEM_PROMPT = `You are a Toronto real estate comparative market analysis expert. When given a property address, you must:
 
@@ -189,6 +191,408 @@ export default function CMAApp() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function exportPDF() {
+    if (!data) return;
+    const rec = data.reconciliation || data.valuation || {};
+    const prop = data.property || {};
+    const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const margin = 48;
+    const contentW = pageW - margin * 2;
+    let y = margin;
+
+    const colors = {
+      black: [26, 26, 26],
+      dark: [68, 68, 68],
+      mid: [136, 136, 136],
+      light: [187, 187, 187],
+      accent: [15, 110, 86],
+      red: [163, 45, 45],
+      bgLight: [247, 246, 243],
+      bgDark: [26, 26, 26],
+      rule: [212, 208, 200],
+    };
+
+    function checkPage(needed) {
+      if (y + needed > pageH - margin) {
+        doc.addPage();
+        y = margin;
+      }
+    }
+
+    function sectionLabel(text) {
+      checkPage(30);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(...colors.mid);
+      doc.text(text.toUpperCase(), margin, y);
+      y += 14;
+    }
+
+    function drawRule() {
+      doc.setDrawColor(...colors.rule);
+      doc.setLineWidth(0.75);
+      doc.line(margin, y, pageW - margin, y);
+      y += 10;
+    }
+
+    // === COVER / HEADER ===
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(...colors.mid);
+    doc.text("COMPARATIVE MARKET ANALYSIS", margin, y);
+    y += 20;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(24);
+    doc.setTextColor(...colors.black);
+    const addressLines = doc.splitTextToSize(data.address || "Property Report", contentW);
+    doc.text(addressLines, margin, y);
+    y += addressLines.length * 28 + 4;
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.setTextColor(...colors.mid);
+    const subtitle = [data.neighbourhood, prop.type, prop.style].filter(Boolean).join("  |  ");
+    doc.text(subtitle, margin, y);
+    y += 14;
+
+    const details = [
+      prop.bedrooms && `${prop.bedrooms} Bed`,
+      prop.bathrooms && `${prop.bathrooms} Bath`,
+      prop.lotSize && `Lot: ${prop.lotSize}`,
+      prop.parking && `Parking: ${prop.parking}`,
+      prop.yearBuilt && `Built: ${prop.yearBuilt}`,
+    ].filter(Boolean).join("   |   ");
+    if (details) {
+      doc.setFontSize(9);
+      doc.setTextColor(...colors.dark);
+      doc.text(details, margin, y);
+      y += 12;
+    }
+    if (prop.lastSoldPrice) {
+      doc.setFontSize(9);
+      doc.setTextColor(...colors.mid);
+      doc.text(`Last sold: ${prop.lastSoldPrice} (${prop.lastSoldDate || "N/A"})`, margin, y);
+      y += 12;
+    }
+    y += 6;
+    drawRule();
+
+    // === VALUATION SUMMARY ===
+    sectionLabel("Valuation Summary");
+    const midVal = rec.weightedAverage || rec.midpoint;
+    const boxW = (contentW - 16) / 3;
+    const boxH = 52;
+
+    // Conservative
+    doc.setFillColor(...colors.bgLight);
+    doc.roundedRect(margin, y, boxW, boxH, 4, 4, "F");
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(...colors.mid);
+    doc.text("CONSERVATIVE (-3%)", margin + 10, y + 16);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(15);
+    doc.setTextColor(...colors.black);
+    doc.text(formatPrice(rec.conservative), margin + 10, y + 36);
+
+    // Midpoint (dark box)
+    const midX = margin + boxW + 8;
+    doc.setFillColor(...colors.bgDark);
+    doc.roundedRect(midX, y, boxW, boxH, 4, 4, "F");
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(170, 170, 170);
+    doc.text("WEIGHTED AVERAGE", midX + 10, y + 16);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(17);
+    doc.setTextColor(255, 255, 255);
+    doc.text(formatPrice(midVal), midX + 10, y + 36);
+
+    // Aggressive
+    const aggX = margin + (boxW + 8) * 2;
+    doc.setFillColor(...colors.bgLight);
+    doc.roundedRect(aggX, y, boxW, boxH, 4, 4, "F");
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(...colors.mid);
+    doc.text("AGGRESSIVE (+3%)", aggX + 10, y + 16);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(15);
+    doc.setTextColor(...colors.black);
+    doc.text(formatPrice(rec.aggressive), aggX + 10, y + 36);
+
+    y += boxH + 18;
+
+    // === MARKET CONTEXT ===
+    if (data.marketContext) {
+      sectionLabel("Market Context");
+      const mc = data.marketContext;
+      const metrics = [
+        ["Avg Sold Price", mc.avgSoldPrice || "—"],
+        ["YoY Change", mc.avgSoldPriceYoY || "—"],
+        ["Days on Market", mc.daysOnMarket != null ? `${mc.daysOnMarket}` : "—"],
+        ["Sale/List Ratio", mc.saleToListRatio || "—"],
+        ["Market Type", mc.marketType || "—"],
+        ["BoC Rate", mc.bocRate || "—"],
+        ["Active Listings", mc.activeListings != null ? `${mc.activeListings}` : "—"],
+        ["Sell Above Ask", mc.sellAboveAsk || "—"],
+      ];
+      const colW = contentW / 4;
+      metrics.forEach((m, i) => {
+        const col = i % 4;
+        const row = Math.floor(i / 4);
+        if (i > 0 && col === 0) checkPage(32);
+        const cx = margin + col * colW;
+        const cy = y + row * 30;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(7);
+        doc.setTextColor(...colors.mid);
+        doc.text(m[0].toUpperCase(), cx, cy);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+        doc.setTextColor(...colors.black);
+        doc.text(m[1], cx, cy + 12);
+      });
+      y += Math.ceil(metrics.length / 4) * 30 + 10;
+      drawRule();
+    }
+
+    // === VALUATION RATIONALE ===
+    if (rec.reasoning) {
+      sectionLabel("Valuation Rationale");
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(...colors.dark);
+      const reasoningLines = doc.splitTextToSize(rec.reasoning, contentW - 10);
+      checkPage(reasoningLines.length * 12 + 10);
+      doc.text(reasoningLines, margin + 5, y);
+      y += reasoningLines.length * 12 + 4;
+      if (rec.listingStrategy) {
+        doc.setFont("helvetica", "italic");
+        doc.setFontSize(8);
+        doc.setTextColor(...colors.mid);
+        const stratLines = doc.splitTextToSize(`Listing strategy: ${rec.listingStrategy}`, contentW - 10);
+        doc.text(stratLines, margin + 5, y);
+        y += stratLines.length * 11 + 4;
+      }
+      y += 10;
+      drawRule();
+    }
+
+    // === COMPARABLE SALES & ADJUSTMENTS ===
+    if (data.comparables?.length > 0) {
+      sectionLabel(`Comparable Sales & Adjustments (${data.comparables.length})`);
+
+      data.comparables.forEach((c, ci) => {
+        const adjRows = c.adjustments || [];
+        const neededHeight = 60 + adjRows.length * 13 + 30;
+        checkPage(neededHeight);
+
+        // Comp header bar
+        doc.setFillColor(...colors.bgLight);
+        doc.roundedRect(margin, y, contentW, 22, 3, 3, "F");
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(9);
+        doc.setTextColor(...colors.black);
+        doc.text(`${ci + 1}. ${c.address}`, margin + 8, y + 14);
+
+        const rightInfo = [c.quality, c.weight != null ? `${(c.weight * 100).toFixed(0)}%` : ""].filter(Boolean).join("  |  ");
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8);
+        doc.setTextColor(...colors.mid);
+        doc.text(rightInfo, pageW - margin - 8, y + 14, { align: "right" });
+        y += 26;
+
+        // Sub-details
+        const subLine = [c.bedBath, c.type, c.soldDate, c.notes].filter(Boolean).join("  |  ");
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(7.5);
+        doc.setTextColor(...colors.mid);
+        doc.text(subLine, margin + 8, y + 2);
+        y += 14;
+
+        // Sold price line
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        doc.setTextColor(...colors.dark);
+        doc.text("Sold Price", margin + 8, y);
+        doc.setFont("helvetica", "bold");
+        doc.text(formatPrice(c.soldPrice), pageW - margin - 8, y, { align: "right" });
+        y += 14;
+
+        // Each adjustment
+        adjRows.forEach((adj) => {
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(8);
+          doc.setTextColor(...colors.mid);
+          doc.text(adj.factor, margin + 16, y);
+
+          const amtStr = (adj.amount > 0 ? "+" : "") + formatPrice(adj.amount);
+          if (adj.amount > 0) doc.setTextColor(...colors.accent);
+          else if (adj.amount < 0) doc.setTextColor(...colors.red);
+          else doc.setTextColor(...colors.dark);
+          doc.setFont("helvetica", "normal");
+          doc.text(amtStr, pageW - margin - 8, y, { align: "right" });
+          y += 13;
+        });
+
+        // Net adjustment / adjusted price
+        doc.setDrawColor(...colors.rule);
+        doc.setLineWidth(0.5);
+        doc.line(margin + 8, y, pageW - margin - 8, y);
+        y += 12;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8);
+        doc.setTextColor(...colors.mid);
+        const netStr = `Net: ${c.totalAdjustment > 0 ? "+" : ""}${formatPrice(c.totalAdjustment)}`;
+        doc.text(netStr, margin + 8, y);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+        doc.setTextColor(...colors.black);
+        doc.text(formatPrice(c.adjustedPrice), pageW - margin - 8, y, { align: "right" });
+        y += 20;
+      });
+
+      y += 4;
+      drawRule();
+
+      // === RECONCILIATION TABLE ===
+      sectionLabel("Valuation Reconciliation");
+
+      doc.autoTable({
+        startY: y,
+        margin: { left: margin, right: margin },
+        head: [["Comparable", "Adj. Price", "Weight", "Contribution"]],
+        body: [
+          ...data.comparables.map((c) => [
+            c.address,
+            formatPrice(c.adjustedPrice),
+            c.weight != null ? `${(c.weight * 100).toFixed(0)}%` : "—",
+            c.adjustedPrice && c.weight != null ? formatPrice(Math.round(c.adjustedPrice * c.weight)) : "—",
+          ]),
+        ],
+        foot: [["Weighted Average", "", "100%", formatPrice(midVal)]],
+        styles: {
+          fontSize: 8,
+          cellPadding: { top: 5, bottom: 5, left: 6, right: 6 },
+          lineColor: colors.rule,
+          lineWidth: 0.5,
+          textColor: colors.dark,
+          font: "helvetica",
+        },
+        headStyles: {
+          fillColor: colors.bgLight,
+          textColor: colors.mid,
+          fontStyle: "bold",
+          fontSize: 7,
+        },
+        footStyles: {
+          fillColor: colors.bgDark,
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          fontSize: 9,
+        },
+        columnStyles: {
+          0: { cellWidth: "auto" },
+          1: { halign: "right", font: "courier" },
+          2: { halign: "center" },
+          3: { halign: "right", font: "courier", fontStyle: "bold" },
+        },
+        alternateRowStyles: { fillColor: [252, 251, 249] },
+      });
+
+      y = doc.lastAutoTable.finalY + 18;
+    }
+
+    // === RISKS & UPSIDE ===
+    const hasRisks = data.risks?.length > 0;
+    const hasUpside = data.upside?.length > 0;
+    if (hasRisks || hasUpside) {
+      checkPage(60);
+      const halfW = (contentW - 12) / 2;
+
+      if (hasRisks) {
+        sectionLabel("Risk Factors");
+        data.risks.forEach((r) => {
+          checkPage(14);
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(8);
+          doc.setTextColor(...colors.red);
+          doc.text("—", margin + 4, y);
+          doc.setTextColor(...colors.dark);
+          const rLines = doc.splitTextToSize(r, halfW * 2 - 16);
+          doc.text(rLines, margin + 14, y);
+          y += rLines.length * 11 + 3;
+        });
+        y += 8;
+      }
+
+      if (hasUpside) {
+        sectionLabel("Upside Factors");
+        data.upside.forEach((u) => {
+          checkPage(14);
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(8);
+          doc.setTextColor(...colors.accent);
+          doc.text("—", margin + 4, y);
+          doc.setTextColor(...colors.dark);
+          const uLines = doc.splitTextToSize(u, halfW * 2 - 16);
+          doc.text(uLines, margin + 14, y);
+          y += uLines.length * 11 + 3;
+        });
+        y += 8;
+      }
+      drawRule();
+    }
+
+    // === PROPERTY FEATURES ===
+    if (prop.features?.length > 0) {
+      sectionLabel("Property Features");
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(...colors.dark);
+      const featureStr = prop.features.join("   |   ");
+      const featureLines = doc.splitTextToSize(featureStr, contentW);
+      checkPage(featureLines.length * 11 + 10);
+      doc.text(featureLines, margin, y);
+      y += featureLines.length * 11 + 14;
+      drawRule();
+    }
+
+    // === DISCLAIMER ===
+    checkPage(40);
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(6.5);
+    doc.setTextColor(...colors.light);
+    const disclaimer = "This CMA is AI-generated for informational purposes only and is not a formal appraisal. Data sourced via web search of TRREB/MLS, Property.ca, Zolo, Redfin, and public records. Actual sale price depends on market conditions, timing, and presentation. Consult a licensed appraiser for formal valuation.";
+    const discLines = doc.splitTextToSize(disclaimer, contentW);
+    doc.text(discLines, margin, y);
+    y += discLines.length * 9 + 8;
+
+    // Generated date
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(6.5);
+    doc.setTextColor(...colors.light);
+    doc.text(`Generated: ${new Date().toLocaleDateString("en-CA", { year: "numeric", month: "long", day: "numeric" })}`, margin, y);
+
+    // Page numbers on every page
+    const totalPages = doc.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(7);
+      doc.setTextColor(...colors.light);
+      doc.text(`Page ${i} of ${totalPages}`, pageW - margin, pageH - 30, { align: "right" });
+      doc.text("Comparative Market Analysis", margin, pageH - 30);
+    }
+
+    const filename = `CMA-${(data.address || "report").replace(/[^a-zA-Z0-9]/g, "-").replace(/-+/g, "-").substring(0, 60)}.pdf`;
+    doc.save(filename);
   }
 
   return (
@@ -474,8 +878,18 @@ export default function CMAApp() {
               This CMA is AI-generated for informational purposes only and is not a formal appraisal. Data sourced via web search of TRREB/MLS, Property.ca, Zolo, Redfin, and public records. Actual sale price depends on market conditions, timing, and presentation. Consult a licensed appraiser for formal valuation.
             </div>
 
-            {/* New search */}
-            <div style={{ textAlign: "center", marginTop: 24 }}>
+            {/* Actions */}
+            <div style={{ display: "flex", justifyContent: "center", gap: 10, marginTop: 24 }}>
+              <button
+                onClick={exportPDF}
+                style={{
+                  padding: "10px 24px", fontSize: 13, fontWeight: 600, border: "none",
+                  borderRadius: 8, background: "#1a1a1a", color: "#fff", cursor: "pointer",
+                  fontFamily: "'DM Sans', sans-serif", transition: "all 0.2s",
+                }}
+              >
+                Export PDF
+              </button>
               <button
                 onClick={() => { setData(null); setAddress(""); }}
                 style={{
