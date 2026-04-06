@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect } from "react";
 import jsPDF from "jspdf";
-import "jspdf-autotable";
+import autoTable from "jspdf-autotable";
 
 const SYSTEM_PROMPT = `You are a Toronto real estate comparative market analysis expert. When given a property address, you must:
 
 1. Search for the property details (bedrooms, bathrooms, lot size, style, features, last sold price/date)
-2. Search for 6-10 recent comparable sold properties (2025-2026 only) in the same neighbourhood
+2. Search for 5 recent comparable sold properties (2025-2026 only) in the same neighbourhood
 3. Search for current market conditions (avg prices, days on market, sale-to-list ratio)
 4. Perform a QUANTITATIVE valuation using the comparable sales adjustment method
 
@@ -162,11 +162,11 @@ export default function CMAApp() {
           model: "claude-sonnet-4-20250514",
           max_tokens: 8000,
           system: SYSTEM_PROMPT,
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
+          tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 6 }],
           messages: [
             {
               role: "user",
-              content: `Perform a full comparative market analysis for this property: ${address.trim()}. Search for the property details, find 6-10 recent 2025-2026 sold comparables in the same neighbourhood, get current market stats, and provide a valuation range. Return ONLY the JSON object specified in the system prompt.`,
+              content: `Perform a full comparative market analysis for this property: ${address.trim()}. Search for the property details, find 5 recent 2025-2026 sold comparables in the same neighbourhood, get current market stats, and provide a valuation range. Return ONLY the JSON object specified in the system prompt.`,
             },
           ],
         }),
@@ -195,6 +195,7 @@ export default function CMAApp() {
 
   function exportPDF() {
     if (!data) return;
+    try {
     const rec = data.reconciliation || data.valuation || {};
     const prop = data.property || {};
     const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
@@ -464,7 +465,7 @@ export default function CMAApp() {
       // === RECONCILIATION TABLE ===
       sectionLabel("Valuation Reconciliation");
 
-      doc.autoTable({
+      const table = autoTable(doc, {
         startY: y,
         margin: { left: margin, right: margin },
         head: [["Comparable", "Adj. Price", "Weight", "Contribution"]],
@@ -506,7 +507,7 @@ export default function CMAApp() {
         alternateRowStyles: { fillColor: [252, 251, 249] },
       });
 
-      y = doc.lastAutoTable.finalY + 18;
+      y = (table?.finalY ?? doc.lastAutoTable?.finalY ?? y) + 18;
     }
 
     // === RISKS & UPSIDE ===
@@ -593,6 +594,10 @@ export default function CMAApp() {
 
     const filename = `CMA-${(data.address || "report").replace(/[^a-zA-Z0-9]/g, "-").replace(/-+/g, "-").substring(0, 60)}.pdf`;
     doc.save(filename);
+    } catch (err) {
+      console.error("PDF export failed:", err);
+      alert("PDF export failed: " + err.message);
+    }
   }
 
   return (
