@@ -51,6 +51,8 @@ CRITICAL: Respond ONLY in this exact JSON format, no markdown, no backticks, no 
       "type": "Det. reno",
       "soldPrice": 2500000,
       "soldDate": "Mon YYYY",
+      "sourceUrl": "URL where you found this sold price",
+      "verified": true,
       "quality": "Strong|Good|Fair|Baseline",
       "weight": 0.20,
       "notes": "brief note on why comparable",
@@ -85,7 +87,14 @@ CRITICAL: Respond ONLY in this exact JSON format, no markdown, no backticks, no 
   "upside": ["upside1", "upside2"]
 }
 
-Always use real data from web search. If you cannot find exact sold prices, estimate based on available data and note it. Focus on 2025-2026 comparables only. All prices in CAD. Every number must be traceable — no arbitrary figures.`;
+DATA INTEGRITY — CRITICAL:
+- ONLY use sold prices you actually found in web search results. Do NOT invent or fabricate sold prices.
+- For each comparable, include "sourceUrl" — the URL where you found the sold price. If you cannot provide a URL, set "verified": false.
+- If you cannot find enough verified comps, return fewer comps rather than fabricating data. 3 verified comps is better than 5 fabricated ones.
+- Set "verified": true only if you found the exact sold price on a real listing page. Set "verified": false if you are estimating.
+- For the subject property's lastSoldPrice: if you cannot find it, set it to "Not found" rather than guessing.
+
+Focus on 2025-2026 comparables only. All prices in CAD.`;
 
 const CONDO_PROMPT = `You are a Toronto real estate comparative market analysis expert specializing in CONDOMINIUMS. When given a condo unit address, you must:
 
@@ -175,6 +184,8 @@ CRITICAL: Respond ONLY in this exact JSON format, no markdown, no backticks, no 
       "buildingName": "building name if different",
       "soldPrice": 1050000,
       "soldDate": "Mon YYYY",
+      "sourceUrl": "URL where you found this sold price",
+      "verified": true,
       "quality": "Strong|Good|Fair|Baseline",
       "weight": 0.25,
       "notes": "brief note on why comparable",
@@ -212,7 +223,14 @@ CRITICAL: Respond ONLY in this exact JSON format, no markdown, no backticks, no 
   "upside": ["upside1", "upside2"]
 }
 
-Always use real data from web search. If you cannot find exact sold prices, estimate based on available data and note it. Focus on 2025-2026 comparables only. All prices in CAD. Every number must be traceable — no arbitrary figures.`;
+DATA INTEGRITY — CRITICAL:
+- ONLY use sold prices you actually found in web search results. Do NOT invent or fabricate sold prices.
+- For each comparable, include "sourceUrl" — the URL where you found the sold price. If you cannot provide a URL, set "verified": false.
+- If you cannot find enough verified comps, return fewer comps rather than fabricating data. 3 verified comps is better than 5 fabricated ones.
+- Set "verified": true only if you found the exact sold price on a real listing page. Set "verified": false if you are estimating.
+- For the subject property's lastSoldPrice: if you cannot find it, set it to "Not found" rather than guessing.
+
+Focus on 2025-2026 comparables only. All prices in CAD.`;
 
 function formatPrice(n) {
   if (n === 0) return "$0";
@@ -330,6 +348,18 @@ export default function CMAApp() {
       const json = await res.json();
       clearInterval(intervalRef.current);
 
+      // Extract web search source URLs from the response
+      const sources = [];
+      for (const block of (json.content || [])) {
+        if (block.type === "web_search_tool_result") {
+          for (const entry of (block.content || [])) {
+            if (entry.type === "web_search_result" && entry.url) {
+              sources.push({ title: entry.title || entry.url, url: entry.url });
+            }
+          }
+        }
+      }
+
       const textBlocks = (json.content || []).filter((b) => b.type === "text").map((b) => b.text);
       const raw = textBlocks.join("\n").replace(/```json|```/g, "").trim();
 
@@ -340,6 +370,7 @@ export default function CMAApp() {
       } else {
         throw new Error("Could not parse response");
       }
+      parsed._sources = sources;
       setData(parsed);
     } catch (e) {
       clearInterval(intervalRef.current);
@@ -1004,10 +1035,25 @@ export default function CMAApp() {
                       </div>
                       {/* Adjustment math */}
                       <div style={{ padding: "10px 16px" }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 13 }}>
-                          <span style={{ color: "#666" }}>Sold price</span>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", fontSize: 13 }}>
+                          <span style={{ color: "#666", display: "flex", alignItems: "center", gap: 6 }}>
+                            Sold price
+                            {c.verified === false && (
+                              <span style={{ fontSize: 9, color: "#A32D2D", background: "#FCEBEB", padding: "1px 6px", borderRadius: 3, fontWeight: 600 }}>UNVERIFIED</span>
+                            )}
+                            {c.verified === true && (
+                              <span style={{ fontSize: 9, color: "#0F6E56", background: "#E1F5EE", padding: "1px 6px", borderRadius: 3, fontWeight: 600 }}>VERIFIED</span>
+                            )}
+                          </span>
                           <span style={{ fontFamily: "'DM Mono', monospace", fontWeight: 600 }}>{formatPrice(c.soldPrice)}</span>
                         </div>
+                        {c.sourceUrl && (
+                          <div style={{ padding: "0 0 2px 0" }}>
+                            <a href={c.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#185FA5", textDecoration: "none" }}>
+                              Source: {c.sourceUrl.length > 60 ? c.sourceUrl.substring(0, 60) + "..." : c.sourceUrl}
+                            </a>
+                          </div>
+                        )}
                         {c.adjustments?.map((adj, j) => (
                           <div key={j} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0 3px 12px", fontSize: 12 }}>
                             <span style={{ color: "#888" }}>{adj.factor}</span>
@@ -1119,9 +1165,27 @@ export default function CMAApp() {
               </div>
             )}
 
+            {/* Data Sources */}
+            {data._sources?.length > 0 && (
+              <div style={{ marginBottom: 28 }}>
+                <div style={{ fontSize: 11, fontFamily: "'DM Mono', monospace", textTransform: "uppercase", letterSpacing: "0.1em", color: "#999", marginBottom: 10 }}>
+                  Data sources ({data._sources.length})
+                </div>
+                <div style={{ background: "#fff", border: "1.5px solid #d4d0c8", borderRadius: 10, padding: 16 }}>
+                  {data._sources.map((s, i) => (
+                    <div key={i} style={{ fontSize: 11, marginBottom: 4, lineHeight: 1.4 }}>
+                      <a href={s.url} target="_blank" rel="noopener noreferrer" style={{ color: "#185FA5", textDecoration: "none" }}>
+                        {s.title}
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Disclaimer */}
             <div style={{ fontSize: 11, color: "#bbb", lineHeight: 1.5, borderTop: "1px solid #e0ddd6", paddingTop: 16 }}>
-              This CMA is AI-generated for informational purposes only and is not a formal appraisal. Data sourced via web search of TRREB/MLS, Property.ca, Zolo, Redfin, and public records. Actual sale price depends on market conditions, timing, and presentation. Consult a licensed appraiser for formal valuation.
+              This CMA is AI-generated for informational purposes only and is not a formal appraisal. Sold prices and comparables are sourced via web search and may be inaccurate or fabricated — always verify against MLS/TRREB records. Consult a licensed appraiser for formal valuation.
             </div>
 
             {/* Actions */}
