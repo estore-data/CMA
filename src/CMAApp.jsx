@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
-const SYSTEM_PROMPT = `You are a Toronto real estate comparative market analysis expert. When given a property address, you must:
+const HOUSE_PROMPT = `You are a Toronto real estate comparative market analysis expert. When given a property address, you must:
 
 1. Search for the property details (bedrooms, bathrooms, lot size, style, features, last sold price/date)
 2. Search for 5 recent comparable sold properties (2025-2026 only) in the same neighbourhood
@@ -32,7 +32,7 @@ CRITICAL: Respond ONLY in this exact JSON format, no markdown, no backticks, no 
   "address": "full address",
   "neighbourhood": "neighbourhood name",
   "property": {
-    "type": "Detached/Semi/Town/Condo",
+    "type": "Detached/Semi/Town",
     "style": "e.g. 3-Storey, Bungalow, 2-Storey",
     "bedrooms": "e.g. 4+1",
     "bathrooms": "e.g. 6",
@@ -87,6 +87,116 @@ CRITICAL: Respond ONLY in this exact JSON format, no markdown, no backticks, no 
 
 Always use real data from web search. If you cannot find exact sold prices, estimate based on available data and note it. Focus on 2025-2026 comparables only. All prices in CAD. Every number must be traceable — no arbitrary figures.`;
 
+const CONDO_PROMPT = `You are a Toronto real estate comparative market analysis expert specializing in CONDOMINIUMS. When given a condo unit address, you must:
+
+1. Search for the SPECIFIC UNIT details — unit number, floor, suite size (sqft), bedrooms, bathrooms, locker, parking, maintenance fees, building name
+2. Search for 5 recent comparable SOLD CONDO UNITS (2025-2026 only) in the SAME BUILDING or very similar nearby buildings
+3. Search for current condo market conditions in the area
+
+IMPORTANT SEARCH STRATEGY FOR CONDOS:
+- The user may provide abbreviated addresses like "3508-375 King St W". This means Unit 3508 at 375 King Street West.
+- Search for the building by its FULL street address first (e.g., "375 King Street West Toronto condo").
+- Then search for the specific unit (e.g., "Unit 3508 375 King Street West" or "3508-375 King St W Toronto sold").
+- Also search for the building name (e.g., "Theatre Park condo Toronto") if you identify it.
+- Search for recent sales IN THE SAME BUILDING first. If fewer than 3, expand to similar buildings nearby.
+- CRITICAL: Match unit TYPE correctly. A penthouse/large unit must be compared against other penthouses/large units, NOT against small 1-bedroom units. Match by sqft range (+/- 20%), bedroom count, and floor level.
+
+CONDO-SPECIFIC ADJUSTMENT FACTORS (use these instead of lot size/basement):
+- Unit size (sqft difference)
+- Floor level (higher floors command premium, ~$5K-15K per 5 floors)
+- Exposure/view (south/west premium, unobstructed views)
+- Parking spots (0 vs 1 vs 2)
+- Locker (with vs without)
+- Maintenance fees (per sqft comparison)
+- Balcony/terrace size
+- Renovation/finishes quality
+- Building amenities differential (if comparing across buildings)
+
+VALUATION METHODOLOGY — YOU MUST FOLLOW THIS EXACTLY:
+
+Step 1: For EACH comparable, calculate individual dollar adjustments relative to the subject unit.
+  - Positive adjustment = comp is INFERIOR to subject on that factor (adjust price UP).
+  - Negative adjustment = comp is SUPERIOR to subject on that factor (adjust price DOWN).
+
+Step 2: For each comp, compute: adjustedPrice = soldPrice + sum(all adjustments for that comp)
+
+Step 3: Assign a weight (0.05 to 0.30) to each comp based on similarity/recency/reliability. Weights MUST sum to 1.0. Same-building comps should get higher weight.
+
+Step 4: Compute weightedAverage = sum(adjustedPrice × weight) across all comps. This IS the midpoint.
+
+Step 5: conservative = weightedAverage × 0.97, aggressive = weightedAverage × 1.03
+
+CRITICAL: The midpoint MUST equal the weighted average of adjusted prices. Do NOT invent a separate number.
+
+CRITICAL: Respond ONLY in this exact JSON format, no markdown, no backticks, no preamble:
+{
+  "address": "full address including unit number",
+  "neighbourhood": "neighbourhood name",
+  "property": {
+    "type": "Condo",
+    "unitNumber": "3508",
+    "floor": "35th",
+    "buildingName": "e.g. Theatre Park",
+    "style": "e.g. Penthouse, 1-Bed+Den, 2-Bed, Studio",
+    "bedrooms": "e.g. 2+1",
+    "bathrooms": "e.g. 2",
+    "sqft": 1250,
+    "parking": "1 owned",
+    "locker": "Yes/No",
+    "maintenanceFee": "$850/mo",
+    "features": ["feature1", "feature2"],
+    "lastSoldPrice": "$X,XXX,XXX",
+    "lastSoldDate": "Month Year",
+    "yearBuilt": "YYYY or Unknown"
+  },
+  "comparables": [
+    {
+      "address": "unit and building address",
+      "bedBath": "2+1/2",
+      "type": "Condo",
+      "sqft": 1100,
+      "floor": "28th",
+      "sameBuilding": true,
+      "soldPrice": 850000,
+      "soldDate": "Mon YYYY",
+      "quality": "Strong|Good|Fair|Baseline",
+      "weight": 0.25,
+      "notes": "brief note on why comparable",
+      "adjustments": [
+        {"factor": "Unit size (150 sqft smaller)", "amount": 60000},
+        {"factor": "Floor level (7 floors lower)", "amount": 15000},
+        {"factor": "No locker", "amount": 8000},
+        {"factor": "Better finishes (superior)", "amount": -25000}
+      ],
+      "totalAdjustment": 58000,
+      "adjustedPrice": 908000
+    }
+  ],
+  "marketContext": {
+    "avgSoldPrice": "$X,XXX",
+    "avgSoldPriceYoY": "-X.X%",
+    "daysOnMarket": 22,
+    "saleToListRatio": "98.5%",
+    "neighbourhoodRank": "#10/144",
+    "marketType": "Buyer's|Balanced|Seller's",
+    "bocRate": "2.75%",
+    "activeListings": 12,
+    "sellAboveAsk": "30%",
+    "avgPricePerSqft": "$950"
+  },
+  "reconciliation": {
+    "weightedAverage": 900000,
+    "conservative": 873000,
+    "aggressive": 927000,
+    "listingStrategy": "Brief listing price recommendation",
+    "reasoning": "2-3 sentence explanation referencing the math above"
+  },
+  "risks": ["risk1", "risk2"],
+  "upside": ["upside1", "upside2"]
+}
+
+Always use real data from web search. If you cannot find exact sold prices, estimate based on available data and note it. Focus on 2025-2026 comparables only. All prices in CAD. Every number must be traceable — no arbitrary figures.`;
+
 function formatPrice(n) {
   if (n === 0) return "$0";
   if (!n) return "\u2014";
@@ -122,6 +232,8 @@ function MetricCard({ label, value, sub, subColor }) {
 
 export default function CMAApp() {
   const [address, setAddress] = useState("");
+  const [propertyType, setPropertyType] = useState("house");
+  const [unitNumber, setUnitNumber] = useState("");
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -155,18 +267,35 @@ export default function CMAApp() {
     }, 4000);
 
     try {
+      const isCondo = propertyType === "condo";
+      const systemPrompt = isCondo ? CONDO_PROMPT : HOUSE_PROMPT;
+      const unit = unitNumber.trim();
+      let queryAddress = address.trim();
+      let userContent;
+
+      if (isCondo) {
+        const fullAddr = unit
+          ? `Unit ${unit}, ${queryAddress}, Toronto`
+          : queryAddress;
+        userContent = `Perform a full comparative market analysis for this CONDO unit: ${fullAddr}. ` +
+          (unit ? `The unit number is ${unit}. ` : "") +
+          `Search for the specific unit details in the building, find 5 recent 2025-2026 sold comparable condo units (prioritize same-building sales), get current condo market stats, and provide a valuation range. Match comparables by similar size, bedroom count, and floor level — do NOT compare a penthouse against small 1-bedrooms. Return ONLY the JSON object specified in the system prompt.`;
+      } else {
+        userContent = `Perform a full comparative market analysis for this property: ${queryAddress}. Search for the property details, find 5 recent 2025-2026 sold comparables in the same neighbourhood, get current market stats, and provide a valuation range. Return ONLY the JSON object specified in the system prompt.`;
+      }
+
       const res = await fetch("/api/cma", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
           max_tokens: 8000,
-          system: SYSTEM_PROMPT,
+          system: systemPrompt,
           tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 6 }],
           messages: [
             {
               role: "user",
-              content: `Perform a full comparative market analysis for this property: ${address.trim()}. Search for the property details, find 5 recent 2025-2026 sold comparables in the same neighbourhood, get current market stats, and provide a valuation range. Return ONLY the JSON object specified in the system prompt.`,
+              content: userContent,
             },
           ],
         }),
@@ -618,14 +747,62 @@ export default function CMAApp() {
           </p>
         </div>
 
+        {/* Property type toggle */}
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
+          <div style={{ display: "inline-flex", background: "#f0ede6", borderRadius: 8, padding: 3 }}>
+            {[["house", "House"], ["condo", "Condo"]].map(([val, label]) => (
+              <button
+                key={val}
+                onClick={() => { setPropertyType(val); if (val === "house") setUnitNumber(""); }}
+                style={{
+                  padding: "8px 24px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  border: "none",
+                  borderRadius: 6,
+                  background: propertyType === val ? "#1a1a1a" : "transparent",
+                  color: propertyType === val ? "#fff" : "#888",
+                  cursor: "pointer",
+                  fontFamily: "'DM Sans', sans-serif",
+                  transition: "all 0.2s",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Search */}
-        <div style={{ display: "flex", gap: 10, marginBottom: 40 }}>
+        <div style={{ display: "flex", gap: 10, marginBottom: 40, flexWrap: "wrap" }}>
+          {propertyType === "condo" && (
+            <input
+              type="text"
+              value={unitNumber}
+              onChange={(e) => setUnitNumber(e.target.value)}
+              placeholder="Unit #"
+              style={{
+                width: 90,
+                padding: "14px 12px",
+                fontSize: 15,
+                border: "1.5px solid #d4d0c8",
+                borderRadius: 10,
+                background: "#fff",
+                outline: "none",
+                fontFamily: "'DM Sans', sans-serif",
+                transition: "border-color 0.2s",
+                textAlign: "center",
+              }}
+              onFocus={(e) => (e.target.style.borderColor = "#1a1a1a")}
+              onBlur={(e) => (e.target.style.borderColor = "#d4d0c8")}
+            />
+          )}
           <input
             type="text"
             value={address}
             onChange={(e) => setAddress(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !loading && runCMA()}
-            placeholder="e.g. 165 Waverley Road, Toronto"
+            placeholder={propertyType === "condo" ? "e.g. 375 King Street West, Toronto" : "e.g. 165 Waverley Road, Toronto"}
             style={{
               flex: 1,
               padding: "14px 18px",
@@ -636,6 +813,7 @@ export default function CMAApp() {
               outline: "none",
               fontFamily: "'DM Sans', sans-serif",
               transition: "border-color 0.2s",
+              minWidth: 200,
             }}
             onFocus={(e) => (e.target.style.borderColor = "#1a1a1a")}
             onBlur={(e) => (e.target.style.borderColor = "#d4d0c8")}
@@ -686,15 +864,21 @@ export default function CMAApp() {
             <div style={{ marginBottom: 28, borderBottom: "1.5px solid #d4d0c8", paddingBottom: 20 }}>
               <div style={{ fontSize: 11, fontFamily: "'DM Mono', monospace", textTransform: "uppercase", letterSpacing: "0.1em", color: "#999", marginBottom: 4 }}>
                 {data.neighbourhood || "Toronto"} &middot; {data.property?.type || "Detached"}
+                {data.property?.buildingName && <span> &middot; {data.property.buildingName}</span>}
               </div>
               <h2 style={{ fontSize: 28, fontWeight: 400, fontFamily: "'Instrument Serif', Georgia, serif", margin: "0 0 10px" }}>
                 {data.address}
               </h2>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 16, fontSize: 13, color: "#666" }}>
+                {data.property?.unitNumber && <span>Unit {data.property.unitNumber}</span>}
+                {data.property?.floor && <span>{data.property.floor} floor</span>}
                 {data.property?.bedrooms && <span>{data.property.bedrooms} bed</span>}
                 {data.property?.bathrooms && <span>{data.property.bathrooms} bath</span>}
+                {data.property?.sqft && <span>{data.property.sqft} sqft</span>}
                 {data.property?.lotSize && <span>{data.property.lotSize} lot</span>}
                 {data.property?.parking && <span>{data.property.parking} parking</span>}
+                {data.property?.locker && <span>Locker: {data.property.locker}</span>}
+                {data.property?.maintenanceFee && <span>Maint: {data.property.maintenanceFee}</span>}
                 {data.property?.style && <span>{data.property.style}</span>}
               </div>
             </div>
@@ -744,9 +928,15 @@ export default function CMAApp() {
                       {/* Comp header row */}
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", borderBottom: "1px solid #eeece6", background: "#fafaf7" }}>
                         <div>
-                          <div style={{ fontWeight: 600, fontSize: 14 }}>{c.address}</div>
+                          <div style={{ fontWeight: 600, fontSize: 14 }}>
+                            {c.address}
+                            {c.sameBuilding && <span style={{ marginLeft: 6, fontSize: 10, color: "#0F6E56", fontWeight: 500 }}>SAME BLDG</span>}
+                          </div>
                           <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>
-                            {c.bedBath} &middot; {c.type} &middot; {c.soldDate}
+                            {c.bedBath} &middot; {c.type}
+                            {c.sqft && <span> &middot; {c.sqft} sqft</span>}
+                            {c.floor && <span> &middot; {c.floor} fl</span>}
+                            {" "}&middot; {c.soldDate}
                             {c.notes && <span> &middot; {c.notes}</span>}
                           </div>
                         </div>
@@ -896,7 +1086,7 @@ export default function CMAApp() {
                 Export PDF
               </button>
               <button
-                onClick={() => { setData(null); setAddress(""); }}
+                onClick={() => { setData(null); setAddress(""); setUnitNumber(""); }}
                 style={{
                   padding: "10px 24px", fontSize: 13, fontWeight: 600, border: "1.5px solid #d4d0c8",
                   borderRadius: 8, background: "transparent", color: "#666", cursor: "pointer",
@@ -915,7 +1105,7 @@ export default function CMAApp() {
             <div style={{ fontSize: 48, marginBottom: 12 }}>&#8962;</div>
             <div style={{ fontSize: 14 }}>Enter a Toronto-area address above to generate a valuation</div>
             <div style={{ fontSize: 12, marginTop: 8, color: "#ccc" }}>
-              Works best with specific street addresses — e.g. "165 Waverley Road, Toronto" or "43 Bellefair Ave, The Beaches"
+              House: "165 Waverley Road, Toronto" &middot; Condo: Unit 3508 + "375 King Street West, Toronto"
             </div>
           </div>
         )}
