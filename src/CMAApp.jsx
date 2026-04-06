@@ -251,6 +251,7 @@ export default function CMAApp() {
   const [address, setAddress] = useState("");
   const [propertyType, setPropertyType] = useState("house");
   const [unitNumber, setUnitNumber] = useState("");
+  const [sqft, setSqft] = useState("");
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -291,16 +292,21 @@ export default function CMAApp() {
       let userContent;
 
       if (isCondo) {
+        const sqftVal = sqft.trim();
         const fullAddr = unit
           ? `Unit ${unit}, ${queryAddress}, Toronto`
           : queryAddress;
         const phVariants = unit
           ? ` The unit may be listed on MLS as "PH${unit}", "PH-${unit}", "PH2-${unit}", or "Unit ${unit}". Try multiple search variations to find the last sold price.`
           : "";
+        const sqftInfo = sqftVal
+          ? ` The unit is ${sqftVal} sqft. This is CONFIRMED — use this exact figure, do not estimate. Find comps within +/-20% of ${sqftVal} sqft (${Math.round(sqftVal * 0.8)}-${Math.round(sqftVal * 1.2)} sqft range).`
+          : "";
         userContent = `Perform a full comparative market analysis for this CONDO unit: ${fullAddr}.` +
           (unit ? ` The unit number is ${unit}.` : "") +
+          sqftInfo +
           phVariants +
-          ` IMPORTANT: First find the subject unit's last sold price — search multiple name variations. Then find 5 recent 2025-2026 sold comparable condo units that are SIMILAR IN SIZE (within +/-20% sqft). Search across nearby buildings in the area, not just the same building. Do NOT use small 1-bed units as comps for a large/penthouse unit. Return ONLY the JSON object specified in the system prompt.`;
+          ` IMPORTANT: First find the subject unit's last sold price — search multiple name variations. Then find 5 recent 2025-2026 sold comparable condo units that are SIMILAR IN SIZE. Search across nearby buildings in the area, not just the same building. Do NOT use small 1-bed units as comps for a large/penthouse unit. Return ONLY the JSON object specified in the system prompt.`;
       } else {
         userContent = `Perform a full comparative market analysis for this property: ${queryAddress}. Search for the property details, find 5 recent 2025-2026 sold comparables in the same neighbourhood, get current market stats, and provide a valuation range. Return ONLY the JSON object specified in the system prompt.`;
       }
@@ -774,7 +780,7 @@ export default function CMAApp() {
             {[["house", "House"], ["condo", "Condo"]].map(([val, label]) => (
               <button
                 key={val}
-                onClick={() => { setPropertyType(val); if (val === "house") setUnitNumber(""); }}
+                onClick={() => { setPropertyType(val); if (val === "house") { setUnitNumber(""); setSqft(""); } }}
                 style={{
                   padding: "8px 24px",
                   fontSize: 13,
@@ -802,6 +808,28 @@ export default function CMAApp() {
               value={unitNumber}
               onChange={(e) => setUnitNumber(e.target.value)}
               placeholder="Unit #"
+              style={{
+                width: 90,
+                padding: "14px 12px",
+                fontSize: 15,
+                border: "1.5px solid #d4d0c8",
+                borderRadius: 10,
+                background: "#fff",
+                outline: "none",
+                fontFamily: "'DM Sans', sans-serif",
+                transition: "border-color 0.2s",
+                textAlign: "center",
+              }}
+              onFocus={(e) => (e.target.style.borderColor = "#1a1a1a")}
+              onBlur={(e) => (e.target.style.borderColor = "#d4d0c8")}
+            />
+          )}
+          {propertyType === "condo" && (
+            <input
+              type="text"
+              value={sqft}
+              onChange={(e) => setSqft(e.target.value.replace(/[^0-9]/g, ""))}
+              placeholder="Sqft"
               style={{
                 width: 90,
                 padding: "14px 12px",
@@ -1109,7 +1137,7 @@ export default function CMAApp() {
                 Export PDF
               </button>
               <button
-                onClick={() => { setData(null); setAddress(""); setUnitNumber(""); }}
+                onClick={() => { setData(null); setAddress(""); setUnitNumber(""); setSqft(""); }}
                 style={{
                   padding: "10px 24px", fontSize: 13, fontWeight: 600, border: "1.5px solid #d4d0c8",
                   borderRadius: 8, background: "transparent", color: "#666", cursor: "pointer",
